@@ -16,13 +16,31 @@ const pdfToJson = require("./routes/pdf-to-json");
 const pdfToTiff = require("./routes/pdf-to-tiff");
 const pdfToTxt = require("./routes/pdf-to-txt");
 const wordToPdf = require("./routes/word-to-pdf");
+const compressPdf = require("./test");
+const imgtoPdf = require("./routes/imgtopdf");
+const audioRouter = require("./routes/audioRouter");
+const videoRouter = require("./routes/videoRouter");
+const userRouter = require("./routes/userlogin");
 const cors = require("cors");
-
+const cookieParser = require("cookie-parser");
+require("dotenv").config();
 const app = express();
 const path = require("path");
+const { default: mongoose } = require("mongoose");
 
 app.use(cors());
+
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log("Connected to MongoDB");
+  })
+  .catch((err) => {
+    console.error("MongoDB connection error:", err);
+  });
+
 app.use(bodyParser.json());
+app.use(cookieParser());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.urlencoded({ extended: true }));
 app.set("views", path.join(__dirname, "/views"));
@@ -44,6 +62,11 @@ app.use(pdfToJson);
 app.use(pdfToTiff);
 app.use(pdfToTxt);
 app.use(wordToPdf);
+app.use(compressPdf);
+app.use(imgtoPdf);
+app.use(audioRouter);
+app.use(videoRouter);
+app.use(userRouter);
 app.use(express.static(path.join(__dirname, "public")));
 
 app.listen(8080, () => {

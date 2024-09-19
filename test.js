@@ -1,82 +1,104 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const { PDFDocument } = require('pdf-lib');
-const sharp = require('sharp');
+const express = require("express");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const { PDFDocument } = require("pdf-lib");
+const sharp = require("sharp");
+const pdf2pic = require("pdf2pic");
 const router = express.Router();
-const pdf2pic = require('pdf2pic');
 
-const upload = multer({ dest: 'uploads/' });
-router.get('/compress-pdf', (req, res) => {
-  res.render('compress');
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.get("/compress-pdf", (req, res) => {
+  res.render("compress");
 });
 
-router.post('/compress', upload.single('pdfFile'), async (req, res) => {
-  const pdfBuffer = fs.readFileSync(req.file.path);
-  const pdfDoc = await PDFDocument.load(pdfBuffer);
+router.post("/compress", upload.single("pdfFile"), async (req, res) => {
+  try {
+    console.log("hit backend");
 
-  // Remove metadata
-  pdfDoc.setTitle('');
-  pdfDoc.setAuthor('');
-  pdfDoc.setSubject('');
-  pdfDoc.setKeywords([]);
-  pdfDoc.setProducer('');
-  pdfDoc.setCreator('');
+    if (!req.file || !req.file.buffer) {
+      throw new Error("No file uploaded or file buffer is missing.");
+    }
 
-  // Convert PDF pages to images, compress them, and add them back to a new PDF
-  const newPdfDoc = await PDFDocument.create();
-  const pageCount = pdfDoc.getPages().length;
+    const pdfBuffer = req.file.buffer;
+    const pdfDoc = await PDFDocument.load(pdfBuffer);
 
-  // Configure pdf2pic options
-  const pdf2picOptions = {
-    format: 'png',
-    size: '600x600',
-    density: 72,
-    savePath: './temp-images',
-  };
-  const converter = pdf2pic(pdf2picOptions);
+    // Remove metadata
+    pdfDoc.setTitle("");
+    pdfDoc.setAuthor("");
+    pdfDoc.setSubject("");
+    pdfDoc.setKeywords([]);
+    pdfDoc.setProducer("");
+    pdfDoc.setCreator("");
 
-  for (let i = 0; i < pageCount; i++) {
-    const page = pdfDoc.getPages()[i];
-    const { width, height } = page.getSize();
+    // Convert PDF pages to images, compress them, and add them back to a new PDF
+    const newPdfDoc = await PDFDocument.create();
+    const pages = pdfDoc.getPages();
 
-    // Convert PDF page to PNG image using pdf2pic
-    const imagePath = await converter.convertBulk(page, -1);
+    const pdf2picOptions = {
+      format: "png",
+      size: "600x600",
+      density: 72,
+      savePath: "./temp-images",
+    };
+    const converter = pdf2pic(pdf2picOptions);
 
-    // Read PNG image into buffer
-    const pngImage = fs.readFileSync(imagePath);
+    // Ensure temp folder exists
+    if (!fs.existsSync(pdf2picOptions.savePath)) {
+      fs.mkdirSync(pdf2picOptions.savePath, { recursive: true });
+    }
 
-    // Compress image using Sharp
-    const compressedImage = await sharp(pngImage)
-      .resize(width, height, { fit: 'inside' })
-      .jpeg({ quality: 50 })
-      .toBuffer();
+    // Loop through pages and process each
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      const { width, height } = page.getSize();
 
-    // Add compressed image to new PDF document
-    const newImage = await newPdfDoc.embedJpg(compressedImage);
-    const newPage = newPdfDoc.addPage([width, height]);
-    newPage.drawImage(newImage, {
-      x: 0,
-      y: 0,
-      width,
-      height,
+      // Convert PDF page to PNG image
+      const pageImagePath = await converter.convert(i + 1);
+
+      if (!pageImagePath.path) {
+        throw new Error("Error converting PDF page to image.");
+      }
+
+      // Compress image using Sharp
+      const pngImage = fs.readFileSync(pageImagePath.path);
+      const compressedImage = await sharp(pngImage)
+        .resize(width, height, { fit: "inside" })
+        .jpeg({ quality: 50 })
+        .toBuffer();
+
+      // Embed compressed image in new PDF
+      const newImage = await newPdfDoc.embedJpg(compressedImage);
+      const newPage = newPdfDoc.addPage([width, height]);
+      newPage.drawImage(newImage, {
+        x: 0,
+        y: 0,
+        width,
+        height,
+      });
+
+      // Clean up temp image file
+      fs.unlinkSync(pageImagePath.path);
+    }
+
+    // Save new compressed PDF to buffer
+    const compressedPdfBytes = await newPdfDoc.save();
+
+    // Write compressed PDF to disk and send it as a download
+    const compressedPdfPath = path.join(__dirname, "compressed.pdf");
+    fs.writeFileSync(compressedPdfPath, compressedPdfBytes);
+
+    // Send compressed PDF as a download and delete it afterward
+    res.download(compressedPdfPath, "compressed.pdf", (err) => {
+      if (err) throw err;
+      fs.unlinkSync(compressedPdfPath);
     });
+  } catch (error) {
+    console.error("Error during PDF compression:", error);
 
-    // Delete temporary PNG image
-    fs.unlinkSync(imagePath);
+    res.status(500).send("An error occurred while compressing the PDF.");
   }
-
-  const compressedPdfBytes = await newPdfDoc.save();
-  fs.writeFileSync('compressed.pdf', compressedPdfBytes);
-
-  // Clean up uploaded file
-  fs.unlinkSync(req.file.path);
-
-  res.download('compressed.pdf', 'compressed.pdf', (err) => {
-    if (err) throw err;
-    fs.unlinkSync('compressed.pdf');
-  });
 });
 
 module.exports = router;
